@@ -1,21 +1,19 @@
-use std::path::Path;
+use std::path::PathBuf;
+use tokio::time::{sleep, Duration};
 
 use clap::Parser;
+use itertools::Itertools;
 use walkdir::WalkDir;
 
-use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::create_multipart_upload::CreateMultipartUploadOutput;
-use aws_sdk_s3::operation::get_object::{GetObjectError, GetObjectOutput};
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::Client;
 use aws_smithy_http::byte_stream::{ByteStream, Length};
 
-//In bytes, minimum chunk size of 5MB. Increase CHUNK_SIZE to send larger chunks.
-const CHUNK_SIZE: u64 = 1024 * 1024 * 5;
-const MAX_CHUNKS: u64 = 10000;
+const CHUNK_SIZE: u64 = 1024 * 1024 * 30; // 30mb chunks
+const MAX_CHUNKS: u64 = 40000; // 40mb
 
-/// Simple program to greet a person
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     #[arg(short, long)]
@@ -23,29 +21,67 @@ struct Args {
 
     #[arg(short, long)]
     dir_path: String,
+
+    #[arg(short, long, default_value_t = 1)]
+    threads: usize,
 }
 
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
 
+    let mut files = Vec::new();
+    let bucket_name = args.bucket_name;
     for file_path in WalkDir::new(args.dir_path) {
         let file_path = file_path.unwrap();
-            println!("Uploading {}", file_path.path().display());
-            upload_multipart(file_path.file_name(), &args.bucket_name)
-                .await
-                .unwrap();
+        if file_path.path().is_dir() {
+        } else {
+            files.push(FileUpload {
+                file_path: file_path.path().to_owned(),
+                bucket_name: bucket_name.to_owned(),
+            });
+        }
+    }
+
+    let thread_count = args.threads;
+    let chunk_len = (files.len() / thread_count) + 1;
+
+    let chunked_items: Vec<Vec<FileUpload>> = files
+        .into_iter()
+        .chunks(chunk_len)
+        .into_iter()
+        .map(|chunk| chunk.collect())
+        .collect();
+
+    let mut threads = vec![];
+    for file_chunk in chunked_items {
+        let handle = tokio::spawn(async move {
+            for file in file_chunk {
+                println!("Uploading {}", &file.file_path.display());
+                sleep(Duration::from_millis(100)).await;
+                upload_multipart(&file).await.unwrap();
+            }
+        });
+        threads.push(handle);
+    }
+
+    for thread in threads {
+        thread.await.unwrap();
     }
 }
 
-async fn upload_multipart(file_path: &std::ffi::OsStr, bucket_name: &str) -> anyhow::Result<()> {
+struct FileUpload {
+    file_path: PathBuf,
+    bucket_name: String,
+}
+
+async fn upload_multipart(file_upload: &FileUpload) -> anyhow::Result<()> {
     let shared_config = aws_config::load_from_env().await;
     let client = Client::new(&shared_config);
 
-    let file_path = file_path.to_str().unwrap();
-
-    let path = Path::new(file_path);
-    let file_size = tokio::fs::metadata(path)
+    let file_path = file_upload.file_path.to_str().unwrap();
+    let bucket_name = &file_upload.bucket_name;
+    let file_size = tokio::fs::metadata(file_path)
         .await
         .expect("it exists I swear")
         .len();
@@ -68,8 +104,9 @@ async fn upload_multipart(file_path: &std::ffi::OsStr, bucket_name: &str) -> any
     }
 
     if file_size == 0 {
-        panic!("Bad file size.");
+        return Ok(());
     }
+
     if chunk_count > MAX_CHUNKS {
         panic!("Too many chunks! Try increasing your chunk size.")
     }
@@ -84,7 +121,7 @@ async fn upload_multipart(file_path: &std::ffi::OsStr, bucket_name: &str) -> any
         };
 
         let stream = ByteStream::read_from()
-            .path(path)
+            .path(file_path)
             .offset(chunk_index * CHUNK_SIZE)
             .length(Length::Exact(this_chunk))
             .build()
@@ -127,25 +164,5 @@ async fn upload_multipart(file_path: &std::ffi::OsStr, bucket_name: &str) -> any
         .await
         .unwrap();
 
-    let data: GetObjectOutput = download_object(&client, bucket_name, file_path).await?;
-    let data_length: u64 = data.content_length().try_into().unwrap();
-    if file_size == data_length {
-        println!("Data lengths match.");
-    } else {
-        println!("The data was not the same size!");
-    }
     Ok(())
-}
-
-async fn download_object(
-    client: &Client,
-    bucket_name: &str,
-    key: &str,
-) -> Result<GetObjectOutput, SdkError<GetObjectError>> {
-    client
-        .get_object()
-        .bucket(bucket_name)
-        .key(key)
-        .send()
-        .await
 }
