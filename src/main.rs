@@ -1,17 +1,17 @@
 use std::path::PathBuf;
-use tokio::time::{sleep, Duration};
+use std::time::Duration;
 
 use clap::Parser;
 use itertools::Itertools;
 use walkdir::WalkDir;
 
+use aws_config::timeout::TimeoutConfig;
 use aws_sdk_s3::operation::create_multipart_upload::CreateMultipartUploadOutput;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::Client;
 use aws_smithy_http::byte_stream::{ByteStream, Length};
 
-const CHUNK_SIZE: u64 = 1024 * 1024 * 30; // 30mb chunks
-const MAX_CHUNKS: u64 = 40000; // 40mb
+const CHUNK_SIZE: u64 = 1024 * 1024 * 3; // 3mb chunks
 
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
@@ -58,7 +58,6 @@ async fn main() {
         let handle = tokio::spawn(async move {
             for file in file_chunk {
                 println!("Uploading {}", &file.file_path.display());
-                sleep(Duration::from_millis(100)).await;
                 upload_multipart(&file).await.unwrap();
             }
         });
@@ -66,7 +65,7 @@ async fn main() {
     }
 
     for thread in threads {
-        thread.await.unwrap();
+        thread.await.expect("Thread paniced");
     }
 }
 
@@ -76,7 +75,10 @@ struct FileUpload {
 }
 
 async fn upload_multipart(file_upload: &FileUpload) -> anyhow::Result<()> {
-    let shared_config = aws_config::load_from_env().await;
+    let timeout_config = TimeoutConfig::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .build();
+    let shared_config = aws_config::from_env().timeout_config(timeout_config).load().await;
     let client = Client::new(&shared_config);
 
     let file_path = file_upload.file_path.to_str().unwrap();
@@ -105,10 +107,6 @@ async fn upload_multipart(file_upload: &FileUpload) -> anyhow::Result<()> {
 
     if file_size == 0 {
         return Ok(());
-    }
-
-    if chunk_count > MAX_CHUNKS {
-        panic!("Too many chunks! Try increasing your chunk size.")
     }
 
     let mut upload_parts: Vec<CompletedPart> = Vec::new();
