@@ -1,12 +1,14 @@
 use std::path::Path;
 
 use clap::Parser;
+use walkdir::WalkDir;
+
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::create_multipart_upload::CreateMultipartUploadOutput;
-use aws_sdk_s3::operation::get_object::{GetObjectOutput, GetObjectError};
-use aws_smithy_http::byte_stream::{ByteStream, Length};
+use aws_sdk_s3::operation::get_object::{GetObjectError, GetObjectOutput};
+use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::Client;
-use aws_sdk_s3::types::{CompletedPart, CompletedMultipartUpload};
+use aws_smithy_http::byte_stream::{ByteStream, Length};
 
 //In bytes, minimum chunk size of 5MB. Increase CHUNK_SIZE to send larger chunks.
 const CHUNK_SIZE: u64 = 1024 * 1024 * 5;
@@ -20,21 +22,27 @@ struct Args {
     bucket_name: String,
 
     #[arg(short, long)]
-    file_path: String,
+    dir_path: String,
 }
-
 
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
 
-    upload_multipart(&args.file_path, &args.bucket_name).await.unwrap();
+    for file_path in WalkDir::new(args.dir_path) {
+        let file_path = file_path.unwrap();
+            println!("Uploading {}", file_path.path().display());
+            upload_multipart(file_path.file_name(), &args.bucket_name)
+                .await
+                .unwrap();
+    }
 }
 
-async fn upload_multipart(file_path: &str, bucket_name: &str) -> anyhow::Result<()> {
+async fn upload_multipart(file_path: &std::ffi::OsStr, bucket_name: &str) -> anyhow::Result<()> {
     let shared_config = aws_config::load_from_env().await;
     let client = Client::new(&shared_config);
 
+    let file_path = file_path.to_str().unwrap();
 
     let path = Path::new(file_path);
     let file_size = tokio::fs::metadata(path)
@@ -82,7 +90,7 @@ async fn upload_multipart(file_path: &str, bucket_name: &str) -> anyhow::Result<
             .build()
             .await
             .unwrap();
-        
+
         //Chunk index needs to start at 0, but part numbers start at 1.
         let part_number = (chunk_index as i32) + 1;
 
@@ -103,7 +111,7 @@ async fn upload_multipart(file_path: &str, bucket_name: &str) -> anyhow::Result<
                 .part_number(part_number)
                 .build(),
         );
-    };
+    }
 
     let completed_multipart_upload: CompletedMultipartUpload = CompletedMultipartUpload::builder()
         .set_parts(Some(upload_parts))

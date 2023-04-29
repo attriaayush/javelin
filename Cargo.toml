@@ -12,6 +12,7 @@ aws-sdk-s3 = "0.26.0"
 aws-smithy-http = "0.55.2"
 clap = { version = "4.2.5", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
+walkdir = "2.3.3"
 
 [profile.release]
 opt-level = 3
