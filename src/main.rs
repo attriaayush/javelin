@@ -127,7 +127,7 @@ async fn upload_multipart(file_path: &std::ffi::OsStr, bucket_name: &str) -> any
         .await
         .unwrap();
 
-    let data: GetObjectOutput = download_object(&client, &bucket_name, file_path).await?;
+    let data: GetObjectOutput = download_object(&client, bucket_name, file_path).await?;
     let data_length: u64 = data.content_length().try_into().unwrap();
     if file_size == data_length {
         println!("Data lengths match.");
