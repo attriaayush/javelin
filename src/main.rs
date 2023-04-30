@@ -74,7 +74,7 @@ async fn main() {
     }
 
     for thread in threads {
-        thread.await.expect("Thread paniced");
+        thread.await.unwrap_or_else(|err| println!("{}", err));
     }
 }
 
