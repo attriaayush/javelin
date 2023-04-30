@@ -1,5 +1,7 @@
 # Javelin
 
+Upload directories to your S3 bucket concurrently. Uses `aws-sdk-s3`'s multipart upload implementation.
+
 ## Steps
 
 ```
