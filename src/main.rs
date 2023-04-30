@@ -55,10 +55,19 @@ async fn main() {
 
     let mut threads = vec![];
     for file_chunk in chunked_items {
+        let timeout_config = TimeoutConfig::builder()
+            .connect_timeout(Duration::from_secs(30))
+            .build();
+        let shared_config = aws_config::from_env()
+            .timeout_config(timeout_config)
+            .load()
+            .await;
+        let client = Client::new(&shared_config);
+
         let handle = tokio::spawn(async move {
             for file in file_chunk {
                 println!("Uploading {}", &file.file_path.display());
-                upload_multipart(&file).await.unwrap();
+                upload_multipart(&file, &client).await.unwrap();
             }
         });
         threads.push(handle);
@@ -74,13 +83,7 @@ struct FileUpload {
     bucket_name: String,
 }
 
-async fn upload_multipart(file_upload: &FileUpload) -> anyhow::Result<()> {
-    let timeout_config = TimeoutConfig::builder()
-        .connect_timeout(Duration::from_secs(30))
-        .build();
-    let shared_config = aws_config::from_env().timeout_config(timeout_config).load().await;
-    let client = Client::new(&shared_config);
-
+async fn upload_multipart(file_upload: &FileUpload, client: &Client) -> anyhow::Result<()> {
     let file_path = file_upload.file_path.to_str().unwrap();
     let bucket_name = &file_upload.bucket_name;
     let file_size = tokio::fs::metadata(file_path)
